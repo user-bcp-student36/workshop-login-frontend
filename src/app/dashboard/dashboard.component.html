@@ -1,0 +1,21 @@
+<header class="topbar">
+  <div>
+    <span class="eyebrow">Workshop backlog</span>
+    <h1>Hola, {{ user.displayName || user.username }}</h1>
+  </div>
+  <button type="button" (click)="logout()">Cerrar sesión</button>
+</header>
+
+<main class="content">
+  <p *ngIf="loading">Cargando tareas...</p>
+  <p class="error" *ngIf="error">{{ error }}</p>
+
+  <section class="grid" *ngIf="!loading && !error">
+    <article class="task" *ngFor="let task of visibleTasks">
+      <div class="task-meta">{{ task.label }}</div>
+      <h2>{{ task.title }}</h2>
+      <p>{{ task.description }}</p>
+      <span>{{ task.status }}</span>
+    </article>
+  </section>
+</main>
