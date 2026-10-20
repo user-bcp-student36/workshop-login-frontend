@@ -1,0 +1,84 @@
+# Plan de corrección del frontend
+
+## Alcance y selección
+
+Se proponen H-01 (alta), H-02 (media) y H-03 (media), los tres primeros hallazgos pendientes de [HALLAZGOS.md](HALLAZGOS.md). Este documento es una propuesta: no se modifica código, no se ejecutan auditorías y no se cambia ningún estado de la matriz. El seguimiento posterior seguirá únicamente en ese archivo.
+
+Base: [docs/ENDPOINTS.md](docs/ENDPOINTS.md), [docs/GOOD_PRACTICES.md](docs/GOOD_PRACTICES.md) y [REGLAS.md](REGLAS.md). H-04 a H-08 no se consideran resueltos por este plan; las extracciones y pruebas necesarias podrán contribuir a ellos, pero su cierre requiere revisión independiente.
+
+## Contratos y límites
+
+- Conservar `POST http://localhost:8080/auth/login`, cuerpo `{ username, password, client: 'angular-workshop' }`, valores originales sin recortar, timeout de 5000 ms y ausencia de Bearer en login. Consumir `data.token` y `data.user` sin inventar nuevos campos obligatorios.
+- Conservar `GET http://localhost:8000/api/tasks?owner=` con la concatenación actual del usuario, encabezado `Authorization: Bearer <token>` y sin agregar timeout propio. No cambiar la codificación del parámetro, rutas, métodos ni esquema de respuesta en esta intervención.
+- Conservar login correcto -> guardar sesión -> `/dashboard` -> consultar tareas -> logout -> `/login`. Sin token, no consultar tareas. Mantener el filtrado exacto de `ARCHIVED`, etiquetas, traducciones y comparador actual de prioridades.
+- Mantener las preferencias entre cierres de sesión. No agregar cookies, refresh tokens, validación JWT, revocación remota ni cambios en servidores. Los errores de tareas no producirán un logout automático nuevo.
+- Las alternativas de H-01 y H-02 proponen cambios locales deliberados: almacenamiento por pestaña y presentación como texto. No son cambios HTTP. El documento de endpoints permanece sin editar en esta fase; si se exige conservar literalmente también el almacenamiento en `localStorage` y el HTML actuales, esas dos correcciones necesitarán aprobar una excepción antes de implementarse. No es posible eliminar esos usos y conservarlos a la vez.
+
+## Preparación común antes del refactor
+
+**Pruebas primero.** Crear una suite de caracterización `src/app/auth-flow.spec.ts` con Vitest, reutilizable para los tres hallazgos. Simular axios, Router, almacenamiento, NgZone y ChangeDetectorRef; no depender de los backends ni usar credenciales reales. El runner actual usa Node ([vitest.config.ts:5](vitest.config.ts#L5)): no asumir que dispone de DOM o de TestBed configurado. Si la carga JIT de los componentes lo necesita, inicializar el compilador Angular ya instalado antes de importarlos.
+
+Caracterizar antes de cambiar producción: usuario/contraseña vacíos y espacios, payload y timeout exactos, éxito con token, respuesta sin token, errores y `busy` restaurado; ausencia de token sin GET, propietario y Bearer, tareas archivadas/visibles, orden y etiquetas, errores y `loading` restaurado; logout conserva preferencias. Usar resultados deterministas y aislar almacenamiento entre casos. Las expectativas de seguridad nuevas se agregarán después de fijar esta línea base y antes de la corrección correspondiente; no se presentarán como comportamientos ya existentes.
+
+**Separación mínima compartida.** Para respetar Clean Code, proponer `AuthService` para el login HTTP, `TasksService` para el GET y `SessionService` como único acceso al token, usuario y preferencias. Los componentes quedan a cargo de interacción, estado visual y navegación; no llaman HTTP ni acceden directamente al almacenamiento. Los servicios no renderizan mensajes ni navegan. No crear una fachada adicional sin necesidad.
+
+Centralizar las URLs en `src/environments/environment.ts`, como exigen las buenas prácticas, y las claves de almacenamiento en un único lugar dentro de `SessionService`. Dar nombre al cliente de login y al timeout de 5000 ms; conservar sus valores. Crear interfaces locales para credenciales, respuesta de login, usuario, preferencias y tareas en `src/app/models/auth.models.ts` y `src/app/models/task.models.ts`, sin `any` nuevo. Tratar datos externos y errores como `unknown` y estrecharlos; no deducir un esquema de servidor completo de las anotaciones. Tipar el código tocado sin activar de golpe opciones estrictas globales que amplíen el alcance.
+
+Usar retornos anticipados para las validaciones y pequeñas funciones con nombres de propósito. Unificar la extracción de errores y finalización de carga para no copiar ramas: mantener la reentrada en NgZone y la detección de cambios hasta que una prueba permita retirarlas. Reutilizar [src/app/utils/legacy-format.ts](src/app/utils/legacy-format.ts) para el formato; no duplicarlo. La creación de nuevos módulos se limita a estas responsabilidades necesarias.
+
+## H-01: Token en localStorage
+
+**Hallazgo y problema.** H-01, Vulnerabilidad, alta, Pendiente. El login escribe el token en [src/app/login/login.component.ts:47](src/app/login/login.component.ts#L47), y el dashboard lo lee en [src/app/dashboard/dashboard.component.ts:36](src/app/dashboard/dashboard.component.ts#L36). El token permanece en almacenamiento persistente y es accesible a JavaScript del mismo origen. No hay evidencia de un XSS explotable ni de la duración real del token.
+
+**Cambio propuesto.** Encapsular la sesión en `SessionService` y usar `sessionStorage` para token y usuario; dejar únicamente las preferencias en `localStorage`. Esta alternativa acotada conserva la recarga en la misma pestaña y el Bearer actual, pero no la persistencia ordinaria tras cerrar la pestaña ni una sesión compartida garantizada entre pestañas. Algunos navegadores restauran sesiones o copian inicialmente el almacenamiento al abrir ventanas: no prometer eliminación universal al cerrar ni aislamiento absoluto.
+
+Eliminar las antiguas claves persistentes de token y usuario al inicializar el servicio, sin migrar silenciosamente un token antiguo. Ello exige un nuevo login para sesiones previas al cambio y debe comunicarse en la revisión. Logout limpia ambas ubicaciones por compatibilidad y no toca preferencias. La falta de disponibilidad del almacenamiento debe producir un error controlado de inicio de sesión, sin navegar a un dashboard que no podrá leerla. No registrar tokens ni contraseñas.
+
+La propuesta mitiga persistencia, **no** impide el robo por JavaScript: `sessionStorage` también es accesible al mismo origen. No presentar H-01 como totalmente eliminado. Una solución con cookie HttpOnly requeriría modificar el contrato o el backend y queda fuera de este alcance.
+
+**Archivos a tocar en la implementación.** [src/app/login/login.component.ts](src/app/login/login.component.ts), [src/app/dashboard/dashboard.component.ts](src/app/dashboard/dashboard.component.ts); nuevos `src/app/services/session.service.ts`, `src/app/services/auth.service.ts`, `src/app/services/tasks.service.ts`, `src/app/models/auth.models.ts`, `src/app/models/task.models.ts`, `src/environments/environment.ts`; nueva suite `src/app/auth-flow.spec.ts` y pruebas específicas `src/app/services/session.service.spec.ts`. Compartir estos módulos con los otros apartados, no generar variantes por hallazgo.
+
+**Prueba de caracterización antes de tocarlos.** En la suite común, observar primero las escrituras actuales en `localStorage`, la navegación solo después del guardado, la lectura en dashboard, el encabezado Bearer y la conservación de preferencias tras logout. Probar una nueva instancia del dashboard con la sesión guardada para simular una recarga.
+
+**Pruebas de corrección y aceptación.** Añadir casos para token/usuario solo en `sessionStorage`, ausencia de residuos antiguos en `localStorage`, conservación de preferencias, recarga en la misma pestaña, pestaña sin sesión -> login sin GET, logout en ambos almacenamientos y error al guardar. Las expectativas antiguas sobre la ubicación del token se reemplazan explícitamente; los contratos HTTP permanecen iguales. Verificar cierre/reapertura y restauración con navegador real y documentar sus límites, sin simular que Node reproduce el ciclo de vida de una pestaña.
+
+## H-02: Mensaje dinámico mediante innerHTML
+
+**Hallazgo y problema.** H-02, Vulnerabilidad, media, Pendiente. Se concatena el usuario y el mensaje de error en [src/app/login/login.component.ts:55](src/app/login/login.component.ts#L55) y [src/app/login/login.component.ts:56](src/app/login/login.component.ts#L56), y se renderizan con [src/app/login/login.component.html:39](src/app/login/login.component.html#L39). Angular sanitiza este binding; el problema confirmado es interpretar contenido externo como HTML, no una ejecución de scripts demostrada.
+
+**Cambio propuesto.** Sustituir `[innerHTML]` por interpolación de texto. Representar mensajes con datos tipados, no fragmentos `<strong>` o `<br>`; si hace falta énfasis, mantener etiquetas estáticas en la plantilla y separar resumen y detalle. No usar `bypassSecurityTrustHtml` ni un sanitizador manual.
+
+Extraer en `src/app/utils/auth-errors.ts` una conversión pequeña de error `unknown` a mensaje público, compartida por los servicios/vistas que la necesiten. Para respuestas HTTP de autenticación y tareas, usar mensajes públicos predefinidos para rechazo de credenciales, conectividad/timeout y fallo general, sin volcar `message`/`detail` arbitrarios del backend. Conservar el éxito, el estado de carga y la ausencia de logout automático. Las prioridades actuales de selección del error se caracterizan primero, pero su exposición literal es un cambio de presentación intencional requerido por las buenas prácticas, no un contrato HTTP nuevo.
+
+**Archivos a tocar en la implementación.** [src/app/login/login.component.ts](src/app/login/login.component.ts), [src/app/login/login.component.html](src/app/login/login.component.html), [src/app/dashboard/dashboard.component.ts](src/app/dashboard/dashboard.component.ts); nuevo `src/app/utils/auth-errors.ts`; servicios y modelos compartidos descritos arriba; nueva `src/app/auth-flow.spec.ts` y `src/app/utils/auth-errors.spec.ts`. La plantilla del dashboard ya interpola el error y no necesita cambiar por este hallazgo.
+
+**Prueba de caracterización antes de tocarlos.** Con axios simulado, registrar los mensajes actuales para campos vacíos, respuesta sin token, error con `response.data.message`, error con solo `message` y error sin detalle; comprobar que `busy` vuelve a falso y no se navega. Analizar la plantilla actual con `parseTemplate` de `@angular/compiler`, ya instalado, para registrar que existe el binding `innerHTML`. Esta prueba de estructura no equivale a una prueba de DOM.
+
+**Pruebas de corrección y aceptación.** Agregar pruebas unitarias del mapeo de errores y del texto público, más una comprobación del AST de la plantilla que exija interpolación y prohíba el binding `innerHTML`. En navegador real, interceptar la respuesta del login y suministrar texto con etiquetas HTML inocuas: el detalle externo no se expone; cualquier dato dinámico mostrado se ve como texto y no crea nodos de ese contenido. Comprobar mensajes visibles, ausencia de HTML interpretado y botón habilitado al terminar. Usar herramientas de navegador disponibles o revisión manual registrada; no agregar una dependencia DOM solo para esta fase sin justificarla.
+
+## H-03: Dependencias axios y lodash
+
+**Hallazgo y problema.** H-03, Sugerencia, media, Pendiente. [package.json:19](package.json#L19) y [package.json:20](package.json#L20) declaran axios 0.31.0 y lodash 4.17.21. Se usan para HTTP y `merge` de preferencias ([src/app/login/login.component.ts:5](src/app/login/login.component.ts#L5), [src/app/login/login.component.ts:6](src/app/login/login.component.ts#L6), [src/app/login/login.component.ts:25](src/app/login/login.component.ts#L25)). Las versiones instaladas, los avisos y las condiciones de afectación aún no están verificados.
+
+**Cambio propuesto.** Después de las pruebas de caracterización, verificar versiones efectivas y ejecutar la auditoría ya definida con `npm run audit:workshop`, contrastando cada aviso con fuente, rango afectado, versión corregida y uso real en el navegador. Si la auditoría necesita un lockfile ausente, generar uno en un paso de implementación explícito y revisar el cambio; un error de herramienta no significa ausencia de CVEs. Registrar la evidencia de auditoría en H-03 de la matriz, no crear otro archivo de seguimiento.
+
+Preferir una actualización incremental de axios y, si hay evidencia aplicable, de lodash a versiones corregidas verificadas; no seleccionar números de versión sin evidencia ni ejecutar `npm audit fix --force`. Mantener axios dentro de `AuthService`/`TasksService` y la carga de preferencias fuera del componente. Revisar tipos y cambios de error del nuevo axios para normalizarlos en el límite, sin modificar payload, timeout, query ni Bearer. No reemplazar `merge` por spread: el código actual acepta mezcla profunda y una sustitución superficial cambiaría su comportamiento.
+
+Si lodash no presenta avisos aplicables, documentar ese resultado y no afirmar que actualizarlo o eliminarlo sea obligatorio. Si no existe una versión compatible corregida para una dependencia, no dar H-03 por cerrado: proponer por separado su sustitución por APIs ya instaladas, con pruebas de equivalencia y revisión antes de ampliar la intervención. No introducir dependencias nuevas en esta propuesta ni ocultar alertas no relacionadas.
+
+**Archivos a tocar en la implementación.** [package.json](package.json), un eventual nuevo `package-lock.json` si procede; servicios compartidos `src/app/services/auth.service.ts`, `src/app/services/tasks.service.ts`, `src/app/services/session.service.ts`; [src/app/login/login.component.ts](src/app/login/login.component.ts) y [src/app/dashboard/dashboard.component.ts](src/app/dashboard/dashboard.component.ts) para retirar sus imports directos después de la extracción; nueva `src/app/auth-flow.spec.ts` y `src/app/services/session.service.spec.ts` para la carga de preferencias. No actualizar Angular, Vitest o TypeScript por comodidad.
+
+**Prueba de caracterización antes de tocarlos.** Antes de cambiar versiones, fijar en la suite común argumentos exactos del POST/GET, resolución y rechazo, respuesta sin token, timeout de login y forma de errores utilizada. Probar las preferencias con ausencia de JSON, JSON inválido, valores por defecto, sobrescritura de campos y objetos anidados para conservar la semántica efectiva de `merge`. Los mocks caracterizan el código consumidor, no prueban la versión real de la biblioteca.
+
+**Pruebas de corrección y aceptación.** Repetir la suite después de actualizar y ejecutar build para comprobar compatibilidad de tipos. Verificar en navegador, con respuestas HTTP interceptadas, que la biblioteca real sigue enviando exactamente el cuerpo, URL, encabezados y timeout esperados; sin depender de los otros repositorios. Repetir la auditoría y distinguir aviso corregido, aviso no aplicable y comprobación bloqueada. El estado solo se actualiza con resultados reales y riesgo residual explícito.
+
+## Orden y verificaciones de implementación
+
+1. Escribir y ejecutar las pruebas de caracterización compartidas contra el código actual. Capturar también el renderizado actual en navegador, antes de cambiar la plantilla.
+2. Extraer configuración, tipos y servicios en pasos pequeños conservando inicialmente el almacenamiento y comportamiento actuales; ejecutar las mismas pruebas después de cada extracción. No combinar este paso con una actualización de dependencias.
+3. Aplicar H-01 con sus pruebas de seguridad y revisar explícitamente el cambio de persistencia. Aplicar H-02 con sus pruebas de texto y errores públicos. Validar cada hallazgo por separado.
+4. Verificar avisos y aplicar H-03 solo con una decisión respaldada por evidencia; repetir pruebas de contrato, build y auditoría.
+5. Ejecutar `npm test`, `npm run build` y `npm run test:coverage`. Revisar al menos 85% de cobertura del código modificado, identificando archivos y métricas del reporte; el runner actual no configura ese umbral automáticamente. No excluir módulos tocados, suprimir alertas ni reducir gates para alcanzar la meta. Completar la verificación de navegador de login, recarga, GET, mensajes y logout.
+6. Actualizar solo las filas correspondientes de [HALLAZGOS.md](HALLAZGOS.md) con las verificaciones reales y los límites restantes. No marcar H-01 como protección contra XSS ni H-03 como libre de CVEs si falta auditoría. Mantener pendientes los demás hallazgos sin una revisión específica.
+
+Estas verificaciones son futuras: este plan no afirma resultados de pruebas, auditoría, cobertura ni renderizado. En esta fase el único archivo creado es PLAN.md.
