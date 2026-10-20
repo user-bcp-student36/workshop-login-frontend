@@ -1,0 +1,25 @@
+<main class="login-shell">
+  <section class="login-card">
+    <div class="eyebrow">Train the Trainers</div>
+    <h1>Workshop Engineering Lab</h1>
+    <p class="subtitle">Inicia sesión para consultar el backlog del ejercicio.</p>
+
+    <label>
+      Usuario
+      <input [(ngModel)]="username" name="username" autocomplete="username" placeholder="student">
+    </label>
+
+    <label>
+      Contraseña
+      <input [(ngModel)]="password" name="password" type="password" autocomplete="current-password" placeholder="Workshop123!">
+    </label>
+
+    <button type="button" (click)="login()" [disabled]="busy">
+      {{ busy ? 'Ingresando...' : 'Ingresar' }}
+    </button>
+
+    <div class="message" *ngIf="message" [innerHTML]="message"></div>
+
+    <small>Laboratorio local. No utilices credenciales reales.</small>
+  </section>
+</main>
